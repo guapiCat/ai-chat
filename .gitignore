@@ -1,2 +1,15 @@
 node_modules/
 dist/
+
+# 环境变量：含 API Key，绝不提交
+.env
+.env.local
+.env.*.local
+
+# 例外：模板文件要提交，供他人参考
+!.env.example
+
+# 日志与系统文件
+*.log
+.DS_Store
+Thumbs.db

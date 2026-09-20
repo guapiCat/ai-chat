@@ -7,10 +7,10 @@ const router = Router();
 const sessions = new Map();
 let idCounter = 0;
 
-function createSession() {
-  const id = String(++idCounter);
-  const session = { id, messages: [], createdAt: Date.now() };
-  sessions.set(id, session);
+function createSession(id) {
+  const sessionId = id || String(++idCounter);
+  const session = { id: sessionId, messages: [], createdAt: Date.now() };
+  sessions.set(sessionId, session);
   return session;
 }
 
@@ -22,11 +22,11 @@ router.post('/send', async (req, res) => {
     return res.status(400).json({ error: 'sessionId and message are required' });
   }
 
-  // 获取或创建会话
+  // 获取或创建会话。必须沿用客户端传来的 sessionId，
+  // 否则（例如服务重启后内存会话丢失）每发一条消息都会新建会话，多轮上下文全丢
   let session = sessions.get(sessionId);
   if (!session) {
-    session = createSession();
-    // 让客户端知道实际 sessionId
+    session = createSession(sessionId);
   }
   session.messages.push({ role: 'user', content: message.trim() });
 
