@@ -29,12 +29,20 @@
   </aside>
 </template>
 
-<script setup>
-defineProps({
-  sessions: { type: Array, default: () => [] },
-  activeId: { type: String, default: null },
-})
-defineEmits(['select', 'create', 'delete'])
+<script setup lang="ts">
+import type { Session } from '../types'
+
+// 两个 prop 都是必填：App.vue 恒定传入，原先的 default 本就是死代码
+defineProps<{
+  sessions: Session[]
+  activeId: string | null
+}>()
+
+defineEmits<{
+  select: [id: string]
+  create: []
+  delete: [id: string]
+}>()
 </script>
 
 <style scoped>

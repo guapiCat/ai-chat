@@ -9,7 +9,7 @@
     />
     <ChatView
       v-if="activeSession"
-      :key="activeId"
+      :key="activeSession.id"
       :session="activeSession"
       @send="handleSend"
     />
@@ -24,16 +24,17 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatView from './components/ChatView.vue'
-import { fetchSessions, createSession, deleteSession, fetchSession } from './api.js'
+import { fetchSessions, createSession, deleteSession, fetchSession } from './api'
+import type { Session } from './types'
 
-const sessions = ref([])
-const activeId = ref(null)
+const sessions = ref<Session[]>([])
+const activeId = ref<string | null>(null)
 
-const activeSession = computed(() => {
+const activeSession = computed<Session | null>(() => {
   if (!activeId.value) return null
   // 从 sessions 列表里找基础信息
   const found = sessions.value.find(s => s.id === activeId.value)
@@ -41,7 +42,7 @@ const activeSession = computed(() => {
   return found
 })
 
-async function loadSessions() {
+async function loadSessions(): Promise<void> {
   try {
     sessions.value = await fetchSessions()
     // 如果当前活跃会话被删了，重置
@@ -53,32 +54,32 @@ async function loadSessions() {
   }
 }
 
-async function switchSession(id) {
+async function switchSession(id: string): Promise<void> {
   activeId.value = id
   // 从后端拉取完整消息
   try {
     const data = await fetchSession(id)
     const session = sessions.value.find(s => s.id === id)
     if (session) {
-      session.messages = data.messages || []
+      session.messages = data.messages ?? []
     }
   } catch (e) {
     console.error('Failed to load messages', e)
   }
 }
 
-async function handleCreate() {
+async function handleCreate(): Promise<void> {
   const { id } = await createSession()
   await loadSessions()
   switchSession(id)
 }
 
-async function handleDelete(id) {
+async function handleDelete(id: string): Promise<void> {
   await deleteSession(id)
   await loadSessions()
 }
 
-async function handleSend(message) {
+async function handleSend(_message: string): Promise<void> {
   // 消息会通过 ChatView 内部的 SSE 流处理
   // 这里只需要刷新会话列表（标题、消息数可能变了）
   // 实际的消息追加在 ChatView 里完成

@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    // 刻意不含 DOM：否则全局 fetch / ReadableStream 会取自 lib.dom，
+    // 与 undici 从 node:stream/web 带来的那套类型冲突
+    "lib": ["ES2023"],
+    "module": "commonjs",
+    "types": ["node"],
+
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // undici@8 自带 .d.ts，需能干净解析
+    "skipLibCheck": true,
+
+    // 运行时交给 tsx，tsc 只做类型检查
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -47,28 +47,28 @@
   </div>
 </template>
 
-<script setup>
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
-import { sendMessage } from '../api.js'
+<script setup lang="ts">
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { sendMessage } from '../api'
+import type { Message, Session } from '../types'
 
-const props = defineProps({
-  session: { type: Object, required: true },
-})
-const emit = defineEmits(['send'])
+const props = defineProps<{ session: Session }>()
+const emit = defineEmits<{ send: [text: string] }>()
 
-const messages = ref([])
+const messages = ref<Message[]>([])
 const inputText = ref('')
 const streaming = ref(false)
 const streamContent = ref('')
 const error = ref('')
-const listRef = ref(null)
-const inputRef = ref(null)
+const listRef = ref<HTMLElement | null>(null)
+const inputRef = ref<HTMLTextAreaElement | null>(null)
 
 // 流式渲染缓冲：chunk 的到达速度远高于屏幕刷新率，逐块赋值 streamContent
 // 会让每个 token 都触发一次响应式更新 + 整段 markdown 重解析 + 重排。
 // 改为先攒进 buffer，每帧最多提交一次。
 let chunkBuffer = ''
-let rafId = null
+// requestAnimationFrame 在浏览器返回 number
+let rafId: number | null = null
 
 function flushChunks() {
   rafId = null
@@ -95,7 +95,7 @@ function cancelFlush() {
 }
 
 // 当切换会话时，加载已有消息
-watch(() => props.session?.id, async (id) => {
+watch(() => props.session.id, async (id) => {
   if (!id) return
   if (props.session.messages) {
     messages.value = [...props.session.messages]
@@ -149,7 +149,7 @@ async function handleSubmit() {
     })
   } catch (e) {
     cancelFlush()
-    error.value = e.message || '请求失败，请检查后端是否启动'
+    error.value = e instanceof Error ? e.message : '请求失败，请检查后端是否启动'
     streaming.value = false
   }
 }
@@ -162,8 +162,8 @@ function scrollToBottom() {
   })
 }
 
-function autoResize(e) {
-  const el = e.target
+function autoResize(e: Event) {
+  const el = e.target as HTMLTextAreaElement
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, 160) + 'px'
 }
@@ -171,7 +171,7 @@ function autoResize(e) {
 /**
  * 极简的 markdown 渲染（支持代码块、加粗、列表、换行）
  */
-function renderMarkdown(text) {
+function renderMarkdown(text: string): string {
   if (!text) return ''
   let html = text
     // 转义 HTML
@@ -179,7 +179,7 @@ function renderMarkdown(text) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     // 代码块 ```lang\n...```
-    .replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    .replace(/```(\w*)\n([\s\S]*?)```/g, (_match: string, lang: string, code: string) => {
       return `<pre><code class="language-${lang}">${code.trim()}</code></pre>`
     })
     // 行内代码
