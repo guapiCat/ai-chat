@@ -14,3 +14,6 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# Playwright MCP 每次运行都会生成快照/console 日志，不入库
+.playwright-mcp/
