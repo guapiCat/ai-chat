@@ -48,7 +48,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { sendMessage } from '../api.js'
 
 const props = defineProps({
@@ -63,6 +63,36 @@ const streamContent = ref('')
 const error = ref('')
 const listRef = ref(null)
 const inputRef = ref(null)
+
+// 流式渲染缓冲：chunk 的到达速度远高于屏幕刷新率，逐块赋值 streamContent
+// 会让每个 token 都触发一次响应式更新 + 整段 markdown 重解析 + 重排。
+// 改为先攒进 buffer，每帧最多提交一次。
+let chunkBuffer = ''
+let rafId = null
+
+function flushChunks() {
+  rafId = null
+  // 没有新内容就不提交，避免空帧触发无谓的重渲染
+  if (!chunkBuffer) return
+  streamContent.value += chunkBuffer
+  chunkBuffer = ''
+  scrollToBottom()
+}
+
+function scheduleFlush() {
+  // 已有待执行的帧就等着，天然实现了合并多个 chunk 的效果
+  if (rafId === null) {
+    rafId = requestAnimationFrame(flushChunks)
+  }
+}
+
+function cancelFlush() {
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId)
+    rafId = null
+  }
+  chunkBuffer = ''
+}
 
 // 当切换会话时，加载已有消息
 watch(() => props.session?.id, async (id) => {
@@ -90,6 +120,7 @@ async function handleSubmit() {
 
   // 准备流式接收
   streaming.value = true
+  cancelFlush()
   streamContent.value = ''
   await nextTick()
   scrollToBottom()
@@ -97,10 +128,13 @@ async function handleSubmit() {
   try {
     await sendMessage(props.session.id, text, {
       onChunk: (chunk) => {
-        streamContent.value += chunk
-        scrollToBottom()
+        chunkBuffer += chunk
+        scheduleFlush()
       },
       onDone: (fullContent) => {
+        // 后端给的 fullContent 是完整原文，直接丢掉未提交的缓冲，
+        // 否则残留的 chunk 会后到一步、追加上去变成重复内容
+        cancelFlush()
         messages.value.push({ role: 'assistant', content: fullContent })
         streamContent.value = ''
         streaming.value = false
@@ -108,11 +142,13 @@ async function handleSubmit() {
         scrollToBottom()
       },
       onError: (errMsg) => {
+        cancelFlush()
         error.value = errMsg
         streaming.value = false
       },
     })
   } catch (e) {
+    cancelFlush()
     error.value = e.message || '请求失败，请检查后端是否启动'
     streaming.value = false
   }
@@ -158,6 +194,9 @@ function renderMarkdown(text) {
 onMounted(() => {
   if (inputRef.value) inputRef.value.focus()
 })
+
+// 会话切换时组件会因 :key 被销毁，此时可能还有一帧挂着，必须撤掉
+onUnmounted(cancelFlush)
 </script>
 
 <style scoped>
