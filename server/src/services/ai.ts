@@ -77,7 +77,33 @@ export class AIService {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    // 跨 chunk 的不完整尾巴一律留在 buffer 里，等下一块到位再拼。
+    // 网络层的切分位置是任意的：可能切在 JSON 中间、切在分隔符的 \r 和 \n 之间，
+    // 所以绝不能拿单个 chunk 就地解析——那样每次切分都会丢一段内容。
     let buffer = '';
+
+    /** 处理一个完整事件；返回 false 表示收到 [DONE]，应当结束读取 */
+    const handleEvent = (event: string): boolean => {
+      // 一个事件可能有多行 data:
+      for (const line of event.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+
+        const payload = trimmed.slice(5).trim();
+        if (!payload) continue; // 空 data: 是心跳，不是错误
+        if (payload === '[DONE]') return false;
+
+        try {
+          const json = JSON.parse(payload) as ChatCompletionChunk;
+          const content = json.choices?.[0]?.delta?.content;
+          if (content) onChunk(content);
+        } catch {
+          // 不能静默吞掉：这里每丢一段都会永久写进会话历史，出问题时需要线索
+          console.warn('[AI Chat] 丢弃无法解析的 SSE 数据:', payload.slice(0, 120));
+        }
+      }
+      return true;
+    };
 
     while (true) {
       // 解构不会破坏 done/value 的关联：TS 4.6+ 支持解构可辨识联合的控制流分析，
@@ -86,29 +112,19 @@ export class AIService {
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      // SSE 以空行分隔事件，保留最后一段不完整的数据
-      const events = buffer.split('\n\n');
+      // SSE 以空行分隔事件，保留最后一段不完整的数据。
+      // \r?\n\r?\n 同时兼容 LF 与 CRLF 两种换行
+      const events = buffer.split(/\r?\n\r?\n/);
       buffer = events.pop() || '';
 
       for (const event of events) {
-        // 一个事件可能有多行 data:
-        for (const line of event.split('\n')) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;
-
-          const payload = trimmed.slice(5).trim();
-          if (payload === '[DONE]') return;
-
-          try {
-            const json = JSON.parse(payload) as ChatCompletionChunk;
-            const content = json.choices?.[0]?.delta?.content;
-            if (content) onChunk(content);
-          } catch {
-            // 跳过无法解析的行
-          }
-        }
+        if (!handleEvent(event)) return;
       }
     }
+
+    // 上游直接断流时，末尾事件可能没有空行收尾，此时它整段还压在 buffer 里。
+    // 不补这一步，最后一个 chunk（常常正是收尾的正文）会被丢掉。
+    if (buffer.trim()) handleEvent(buffer);
   }
 
   /** 把 OpenAI 的错误响应转成一句人话 */

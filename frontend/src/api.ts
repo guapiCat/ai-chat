@@ -57,7 +57,33 @@ export async function sendMessage(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  // 同服务端：一行 SSE 可能被切在任意位置（JSON 中间、行尾的 \n 中间），
+  // 不完整的尾巴必须留在 buffer 里等下一块，就近解析会丢掉半行。
   let buffer = '';
+
+  /** 处理一行（已按 \n 切开）；非数据行直接忽略 */
+  const handleLine = (line: string): void => {
+    const trimmed = line.trim();
+    // 后端固定写 "data: "，这里放宽到 "data:"（无空格）以兼容其他实现
+    if (!trimmed.startsWith('data:')) return;
+
+    const payload = trimmed.slice(5).trim();
+    if (!payload) return;
+
+    try {
+      const data = JSON.parse(payload) as ChatEvent;
+      if (data.type === 'chunk') {
+        onChunk?.(data.content);
+      } else if (data.type === 'done') {
+        onDone?.(data.content);
+      } else if (data.type === 'error') {
+        onError?.(data.content);
+      }
+    } catch {
+      // 解析失败意味着有内容缺失，留个痕迹而不是无声吞掉
+      console.warn('[SSE] 丢弃无法解析的数据行:', payload.slice(0, 120));
+    }
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -67,22 +93,10 @@ export async function sendMessage(
     const lines = buffer.split('\n');
     buffer = lines.pop() ?? '';
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('data: ')) continue;
-
-      try {
-        const data = JSON.parse(trimmed.slice(6)) as ChatEvent;
-        if (data.type === 'chunk') {
-          onChunk?.(data.content);
-        } else if (data.type === 'done') {
-          onDone?.(data.content);
-        } else if (data.type === 'error') {
-          onError?.(data.content);
-        }
-      } catch {
-        // 跳过无法解析的行
-      }
-    }
+    for (const line of lines) handleLine(line);
   }
+
+  // 流提前结束时最后一行可能没有换行收尾。不补这一步，末尾的 done 事件会被丢掉，
+  // 界面就会永远停在“AI 正在生成...”上。
+  if (buffer.trim()) handleLine(buffer);
 }
