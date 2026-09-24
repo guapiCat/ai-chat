@@ -31,16 +31,20 @@ export async function deleteSession(id: string): Promise<void> {
 
 /**
  * 发送消息（SSE 流式）
+ *
+ * handlers.signal 用于中断：abort 后本函数以 AbortError 落败，且不会走 onError——
+ * 调用方据此把「用户主动停止」和「真的出错了」分开处理。
  */
 export async function sendMessage(
   sessionId: string,
   message: string,
-  { onChunk, onDone, onError }: ChatStreamHandlers
+  { onChunk, onDone, onError, signal }: ChatStreamHandlers
 ): Promise<void> {
   const response = await fetch(`${API_BASE}/send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId, message }),
+    signal,
   });
 
   if (!response.ok) {

@@ -6,6 +6,7 @@
         <div class="avatar">{{ msg.role === 'user' ? 'U' : 'AI' }}</div>
         <div class="bubble">
           <div class="content" v-html="renderMarkdown(msg.content)"></div>
+          <div v-if="msg.stopped" class="stopped-tag">已停止</div>
         </div>
       </div>
       <!-- 正在输入的指示器 -->
@@ -34,12 +35,12 @@
           rows="1"
           :disabled="streaming"
         ></textarea>
-        <button
-          class="btn-send"
-          :disabled="!inputText.trim() || streaming"
-          @click="handleSubmit"
-        >
-          {{ streaming ? '...' : '发送' }}
+        <!-- 同一个按钮位：生成中显示「停止」，否则显示「发送」 -->
+        <button v-if="streaming" class="btn-send btn-stop" @click="handleStop">
+          停止
+        </button>
+        <button v-else class="btn-send" :disabled="!inputText.trim()" @click="handleSubmit">
+          发送
         </button>
       </div>
       <p v-if="streaming" class="streaming-hint">AI 正在生成...</p>
@@ -62,6 +63,9 @@ const streamContent = ref('')
 const error = ref('')
 const listRef = ref<HTMLElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
+
+// 中断用。streaming 期间输入被禁用，所以同一时刻只可能有一轮在跑
+let abortController: AbortController | null = null
 
 // 流式渲染缓冲：chunk 的到达速度远高于屏幕刷新率，逐块赋值 streamContent
 // 会让每个 token 都触发一次响应式更新 + 整段 markdown 重解析 + 重排。
@@ -94,6 +98,18 @@ function cancelFlush() {
   chunkBuffer = ''
 }
 
+/**
+ * 收尾专用：先把还没提交的那一帧补进去再撤销。
+ * 停止生成时必须用这个而不是 cancelFlush，否则最后不到一帧的内容会跟着缓冲一起丢掉。
+ */
+function commitFlush() {
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId)
+    rafId = null
+  }
+  flushChunks()
+}
+
 // 当切换会话时，加载已有消息
 watch(() => props.session.id, async (id) => {
   if (!id) return
@@ -122,11 +138,13 @@ async function handleSubmit() {
   streaming.value = true
   cancelFlush()
   streamContent.value = ''
+  abortController = new AbortController()
   await nextTick()
   scrollToBottom()
 
   try {
     await sendMessage(props.session.id, text, {
+      signal: abortController.signal,
       onChunk: (chunk) => {
         chunkBuffer += chunk
         scheduleFlush()
@@ -148,10 +166,39 @@ async function handleSubmit() {
       },
     })
   } catch (e) {
-    cancelFlush()
-    error.value = e instanceof Error ? e.message : '请求失败，请检查后端是否启动'
-    streaming.value = false
+    if (isAbortError(e)) {
+      // 用户点了「停止」：没有完整回复可用了，就把已生成的部分保留下来并打标记
+      commitFlush()
+      // 一个字都没生成就停了（比如刚点发送就点停止）就不留空消息，
+      // 空 content 放进历史喂给模型也没有意义
+      if (streamContent.value) {
+        messages.value.push({
+          role: 'assistant',
+          content: streamContent.value,
+          stopped: true,
+        })
+      }
+      streamContent.value = ''
+      streaming.value = false
+      scrollToBottom()
+    } else {
+      cancelFlush()
+      error.value = e instanceof Error ? e.message : '请求失败，请检查后端是否启动'
+      streaming.value = false
+    }
+  } finally {
+    abortController = null
   }
+}
+
+/** 中断抛的是 AbortError，必须和真正的请求失败区分开，否则停止会被显示成报错 */
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && e.name === 'AbortError'
+}
+
+function handleStop() {
+  // 只负责发起中止，收尾统一在 handleSubmit 的 catch 里做
+  abortController?.abort()
 }
 
 function scrollToBottom() {
@@ -269,6 +316,15 @@ onUnmounted(cancelFlush)
   border-bottom-left-radius: 4px;
 }
 
+/* 用户中途停止生成：正文是截断的，标记出来免得日后当成完整回复 */
+.stopped-tag {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.12);
+  font-size: 12px;
+  color: #999;
+}
+
 .bubble :deep(pre) {
   background: #1a1a2e;
   color: #e8e8e8;
@@ -367,6 +423,13 @@ onUnmounted(cancelFlush)
 .btn-send:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 生成中复用同一个按钮位，做成次级样式以免和「发送」抢注意力 */
+.btn-stop {
+  background: #fff;
+  color: #555;
+  border: 1px solid #ddd;
 }
 
 .streaming-hint {

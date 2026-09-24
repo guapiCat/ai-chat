@@ -47,8 +47,14 @@ export class AIService {
    * 调用 OpenAI Chat Completions 并流式返回内容
    * @param messages 消息历史
    * @param onChunk 每段内容的回调
+   * @param signal 用于中止。abort 后正在进行的 read 会以 AbortError 落败，
+   *               上游请求同时被取消——否则客户端都走了，OpenAI 还会把整条生成完
    */
-  async chatStream(messages: Message[], onChunk: (chunk: string) => void): Promise<void> {
+  async chatStream(
+    messages: Message[],
+    onChunk: (chunk: string) => void,
+    signal?: AbortSignal
+  ): Promise<void> {
     if (!this.isConfigured) {
       throw new Error(
         '未配置 OPENAI_API_KEY。请在 server/.env 中填入真实 Key（参考 server/.env.example）后重启服务。'
@@ -66,6 +72,7 @@ export class AIService {
         messages: messages.map((m) => ({ role: m.role, content: m.content })),
         stream: true,
       }),
+      signal,
     });
 
     if (!response.ok) {

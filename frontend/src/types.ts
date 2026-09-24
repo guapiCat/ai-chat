@@ -4,6 +4,8 @@
 export interface Message {
   role: 'user' | 'assistant';
   content: string;
+  /** 用户中途停止了生成：此时的 content 只是已生成的部分内容 */
+  stopped?: boolean;
 }
 
 export interface Session {
@@ -25,4 +27,10 @@ export interface ChatStreamHandlers {
   onChunk?: (chunk: string) => void;
   onDone?: (fullContent: string) => void;
   onError?: (message: string) => void;
+  /**
+   * 中断用。abort 之后 sendMessage 会以 AbortError 落败，
+   * 且不会走 onError——「用户主动停止」和「真的出错了」要区别对待，
+   * 收尾方式由调用方决定
+   */
+  signal?: AbortSignal;
 }

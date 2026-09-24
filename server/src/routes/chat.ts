@@ -48,30 +48,56 @@ router.post(
       'X-Accel-Buffering': 'no',
     });
 
+    // 客户端断开（点了「停止」，或网络掉线）时要立刻中止上游请求。
+    // 否则人都走了，OpenAI 还会把整条回复生成完，token 白烧。
+    // 正常结束时 close 同样会触发，但那时 writableEnded 已为 true，借此区分两者。
+    const upstream = new AbortController();
+    let clientGone = false;
+    res.on('close', () => {
+      if (res.writableEnded) return;
+      clientGone = true;
+      upstream.abort();
+    });
+
     let fullContent = '';
+
+    // 连接已断时不能再往 res 写
+    const send = (event: ChatEvent): void => {
+      if (clientGone) return;
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
 
     try {
       // 控制上下文窗口：保留最近 20 条消息
       const contextMessages = session.messages.slice(-20);
 
-      await aiService.chatStream(contextMessages, (chunk) => {
-        fullContent += chunk;
-        const event: ChatEvent = { type: 'chunk', content: chunk };
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
-      });
+      await aiService.chatStream(
+        contextMessages,
+        (chunk) => {
+          fullContent += chunk;
+          send({ type: 'chunk', content: chunk });
+        },
+        upstream.signal
+      );
 
       // 保存助手回复
       session.messages.push({ role: 'assistant', content: fullContent });
-
-      const doneEvent: ChatEvent = { type: 'done', content: fullContent };
-      res.write(`data: ${JSON.stringify(doneEvent)}\n\n`);
+      send({ type: 'done', content: fullContent });
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      console.error('[Chat Error]', reason);
-      const errorEvent: ChatEvent = { type: 'error', content: reason };
-      res.write(`data: ${JSON.stringify(errorEvent)}\n\n`);
+      if (clientGone) {
+        // 用户主动停止：上游已被中止，拿不到完整回复，但也不能假装这轮没发生过。
+        // 已生成的部分要落库并打标记，否则刷新或切会话后这段内容会凭空消失，
+        // 而模型下次也会以为上一轮是完整的。
+        if (fullContent) {
+          session.messages.push({ role: 'assistant', content: fullContent, stopped: true });
+        }
+      } else {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.error('[Chat Error]', reason);
+        send({ type: 'error', content: reason });
+      }
     } finally {
-      res.end();
+      if (!clientGone) res.end();
     }
   }
 );

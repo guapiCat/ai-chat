@@ -4,6 +4,8 @@
 export interface Message {
   role: 'user' | 'assistant';
   content: string;
+  /** 用户中途停止了生成：此时的 content 只是已生成的部分内容 */
+  stopped?: boolean;
 }
 
 /** 内存会话存储里的完整会话 */

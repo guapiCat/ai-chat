@@ -1,0 +1,25 @@
+{
+  // 测试跑在 Node 里，需要 @types/node 提供 node:test / node:assert。
+  // 单独开一份配置，是为了让 tsconfig.json 继续把 node 类型挡在浏览器代码之外
+  // （见那里的 "types": ["vite/client"] 注释）。
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    "noEmit": true
+  },
+  "include": ["test/**/*.ts"]
+}
