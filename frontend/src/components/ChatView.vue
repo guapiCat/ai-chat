@@ -1,26 +1,32 @@
 <template>
   <div class="chat-view">
     <!-- 消息列表 -->
-    <div class="message-list" ref="listRef">
-      <div v-for="(msg, i) in messages" :key="i" class="message" :class="msg.role">
-        <div class="avatar">{{ msg.role === 'user' ? 'U' : 'AI' }}</div>
-        <div class="bubble">
-          <div class="content" v-html="renderMarkdown(msg.content)"></div>
-          <div v-if="msg.stopped" class="stopped-tag">已停止</div>
+    <div class="message-list-wrap">
+      <div class="message-list" ref="listRef" @scroll="updateAtBottom">
+        <div v-for="(msg, i) in messages" :key="i" class="message" :class="msg.role">
+          <div class="avatar">{{ msg.role === 'user' ? 'U' : 'AI' }}</div>
+          <div class="bubble">
+            <div class="content" v-html="renderMarkdown(msg.content)"></div>
+            <div v-if="msg.stopped" class="stopped-tag">已停止</div>
+          </div>
+        </div>
+        <!-- 正在输入的指示器 -->
+        <div v-if="streaming" class="message assistant">
+          <div class="avatar">AI</div>
+          <div class="bubble">
+            <div class="content" v-html="renderMarkdown(streamContent)"></div>
+            <span class="cursor-blink">▌</span>
+          </div>
+        </div>
+        <!-- 错误提示 -->
+        <div v-if="error" class="message system">
+          <div class="bubble error-bubble">{{ error }}</div>
         </div>
       </div>
-      <!-- 正在输入的指示器 -->
-      <div v-if="streaming" class="message assistant">
-        <div class="avatar">AI</div>
-        <div class="bubble">
-          <div class="content" v-html="renderMarkdown(streamContent)"></div>
-          <span class="cursor-blink">▌</span>
-        </div>
-      </div>
-      <!-- 错误提示 -->
-      <div v-if="error" class="message system">
-        <div class="bubble error-bubble">{{ error }}</div>
-      </div>
+      <!-- 用户往上翻看历史时才浮出来，否则生成过程会一直把他拽回底部 -->
+      <button v-if="!atBottom" class="btn-scroll-bottom" @click="scrollToBottom(true)">
+        ↓ 回到底部
+      </button>
     </div>
 
     <!-- 输入区 -->
@@ -63,6 +69,14 @@ const streamContent = ref('')
 const error = ref('')
 const listRef = ref<HTMLElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
+
+// 用户是否贴在消息列表底部。贴底时新内容自动跟随；一旦往上翻看历史就置 false，
+// 生成过程不再抢滚动位置，改由「回到底部」按钮把控制权交还给用户
+const atBottom = ref(true)
+
+// 距底部多少像素内仍算贴底。scrollTop 取整而 scrollHeight - clientHeight 可能是小数
+// （页面缩放、hidpi 下常见），判严格相等会把贴底误判成没贴底，所以留一点容差
+const BOTTOM_THRESHOLD = 4
 
 // 中断用。streaming 期间输入被禁用，所以同一时刻只可能有一轮在跑
 let abortController: AbortController | null = null
@@ -121,7 +135,8 @@ watch(() => props.session.id, async (id) => {
   error.value = ''
   streamContent.value = ''
   await nextTick()
-  scrollToBottom()
+  // 换会话是明确意图：直接定位到最新一条，不必管切换前的滚动位置
+  scrollToBottom(true)
 }, { immediate: true })
 
 async function handleSubmit() {
@@ -140,7 +155,8 @@ async function handleSubmit() {
   streamContent.value = ''
   abortController = new AbortController()
   await nextTick()
-  scrollToBottom()
+  // 发送同样是明确意图：用户就是要看回复，直接跳到底
+  scrollToBottom(true)
 
   try {
     await sendMessage(props.session.id, text, {
@@ -201,11 +217,25 @@ function handleStop() {
   abortController?.abort()
 }
 
-function scrollToBottom() {
+/** 滚动时重新判定是否贴底，顺带决定「回到底部」按钮的去留 */
+function updateAtBottom() {
+  const el = listRef.value
+  if (!el) return
+  atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_THRESHOLD
+}
+
+/**
+ * 滚到底部。force=true 用于「发送」「切换会话」「点回到底部」这类明确的用户意图；
+ * 流式追加时传 false，此时若用户已经翻上去看历史就不再把他拽回底部。
+ * 判定放在 nextTick 里做，尽量贴近真正改 scrollTop 的时刻，免得和用户的滚动抢跑。
+ */
+function scrollToBottom(force = false) {
   nextTick(() => {
-    if (listRef.value) {
-      listRef.value.scrollTop = listRef.value.scrollHeight
-    }
+    const el = listRef.value
+    if (!el) return
+    if (!force && !atBottom.value) return
+    el.scrollTop = el.scrollHeight
+    atBottom.value = true
   })
 }
 
@@ -254,10 +284,43 @@ onUnmounted(cancelFlush)
   background: #fff;
 }
 
-.message-list {
+/* 滚动容器的外层，同时给「回到底部」按钮提供定位上下文 */
+.message-list-wrap {
   flex: 1;
+  /* flex 子项默认 min-height: auto，不置 0 的话内部撑不出滚动条 */
+  min-height: 0;
+  position: relative;
+}
+
+.message-list {
+  height: 100%;
   overflow-y: auto;
   padding: 24px 16px;
+  /* 关掉滚动锚定：流式回复每帧整体重写气泡的 innerHTML，锚点节点会被销毁，
+     浏览器重选锚点时可能自行挪动 scrollTop，把正在翻历史的用户顶走。
+     滚动位置统一由 atBottom 那套逻辑掌管，不需要浏览器代劳 */
+  overflow-anchor: none;
+}
+
+/* 「回到底部」：浮在消息区底部居中，只在用户翻离底部时出现 */
+.btn-scroll-bottom {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border: 1px solid #e0e0e6;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  color: #555;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-scroll-bottom:hover {
+  background: #f0f2f5;
 }
 
 .message {
